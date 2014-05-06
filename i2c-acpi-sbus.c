@@ -1,5 +1,6 @@
 /*
     Copyright 2013 David Bartley <andareed@gmail.com>
+    Copyright 2014 Pali Rohár <pali.rohar@gmail.com>
 
     This program is free software; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -145,83 +146,157 @@ static const struct i2c_algorithm smbus_algorithm = {
 	.functionality	= acpi_sbus_func,
 };
 
-struct i2c_adapter acpi_sbus = {
-	.owner		= THIS_MODULE,
-	.class		= I2C_CLASS_HWMON | I2C_CLASS_SPD,
-	.algo		= &smbus_algorithm,
-	.name		= "ACPI SBUS i2c",
+static int i2c_acpi_sbus_add(struct acpi_device *device)
+{
+	struct i2c_adapter *adapter;
+	struct acpi_buffer buffer;
+	acpi_status status;
+
+	if (!device)
+		return -EINVAL;
+
+	adapter = devm_kzalloc(&device->dev, sizeof(*adapter), GFP_KERNEL);
+	if (!adapter) {
+		pr_err("ACPI SBUS: failed to allocate memory\n");
+		return -ENOMEM;
+	}
+
+	buffer.length = ACPI_ALLOCATE_BUFFER;
+	buffer.pointer = NULL;
+	status = acpi_get_name(device->handle, ACPI_FULL_PATHNAME, &buffer);
+	if (ACPI_FAILURE(status)) {
+		pr_err("ACPI SBUS: failed to get path\n");
+		return -EINVAL;
+	}
+
+	adapter->owner = THIS_MODULE;
+	adapter->class = I2C_CLASS_HWMON | I2C_CLASS_SPD;
+	adapter->algo = &smbus_algorithm;
+	adapter->dev.parent = &device->dev;
+	adapter->algo_data = device->handle;
+
+	snprintf(adapter->name, sizeof(adapter->name),
+		"ACPI SBUS i2c adapter at %s", (char *)buffer.pointer);
+
+	kfree(buffer.pointer);
+
+	if (i2c_add_adapter(adapter)) {
+		pr_err("ACPI SBUS: failed to add ACPI SBUS adapter\n");
+		return -EINVAL;;
+	}
+
+	device->driver_data = adapter;
+
+	pr_info("ACPI SBUS: added %s\n", adapter->name);
+	return 0;
+}
+
+static int i2c_acpi_sbus_remove(struct acpi_device *device)
+{
+	struct i2c_adapter *adapter = device->driver_data;
+
+	i2c_del_adapter(adapter);
+
+	pr_info("ACPI SBUS: removed %s\n", adapter->name);
+	return 0;
+}
+
+static const struct acpi_device_id i2c_acpi_sbus_ids[] = {
+	{ "", 0 },
 };
 
-static bool added_acpi_sbus;
+static struct acpi_driver i2c_acpi_sbus_driver = {
+	.name = "i2c-acpi-sbus",
+	.ids = i2c_acpi_sbus_ids,
+	.ops = {
+		.add = i2c_acpi_sbus_add,
+		.remove = i2c_acpi_sbus_remove,
+	},
+	.owner = THIS_MODULE,
+};
 
 static acpi_status find_acpi_sbus_devices(acpi_handle handle, u32 level,
 				          void *context, void **return_value)
 {
+	int ret;
 	acpi_status status;
 	char node_name[5];
-	struct acpi_buffer buffer = { sizeof(node_name), node_name };
-	struct acpi_device *device = NULL;
+	struct acpi_buffer buffer;
+	struct acpi_device *device;
 
+	buffer.length = sizeof(node_name);
+	buffer.pointer = node_name;
 	status = acpi_get_name(handle, ACPI_SINGLE_NAME, &buffer);
 	if (ACPI_FAILURE(status) || strcmp("SBUS", node_name) != 0)
 		return AE_OK;
 
-	if (added_acpi_sbus) {
-		pr_warn("ACPI: only one SBUS device supported!\n");
-		return AE_ALREADY_EXISTS;
-	}
+	/*
+	  TODO: check if acpi handle has methods:
+	        "SRXB" "SSXB" "SRDB" "SWRB"
+	        "SRDW" "SWRW" "SBLR" "SBLW"
+	*/
 
+	pr_info("ACPI SBUS: found ACPI SBUS i2c adapter\n");
+
+	device = NULL;
 	acpi_bus_get_device(handle, &device);
 	if (!device) {
-		pr_err("ACPI: failed to get device for SBUS!\n");
-		return AE_NOT_FOUND;
+		pr_err("ACPI SBUS: failed to get device\n");
+		return AE_OK;
 	}
 
-	acpi_sbus.dev.parent = &device->dev;
-	acpi_sbus.algo_data = handle;
-
-	if (i2c_add_adapter(&acpi_sbus)) {
-		pr_err("ACPI: failed to add i2c adapter for SBUS device!\n");
-		return AE_ERROR;
+	if (device->driver || device->driver_data) {
+		pr_err("ACPI SBUS: device already in use\n");
+		return AE_OK;
 	}
 
-	pr_info("ACPI: found SBUS i2c device.\n");
-	added_acpi_sbus = true;
+	device->dev.driver = &i2c_acpi_sbus_driver.drv;
+	ret = device_attach(&device->dev);
+	if (!ret) {
+		pr_err("ACPI SBUS: failed to attach device\n");
+		return AE_OK;
+	}
+
+	device->driver = &i2c_acpi_sbus_driver;
+	ret = i2c_acpi_sbus_add(device);
+	if (ret) {
+		pr_err("ACPI SBUS: failed to init device\n");
+		device_release_driver(&device->dev);
+		device->driver = NULL;
+		device->driver_data = NULL;
+		return AE_OK;
+	}
+
+	get_device(&device->dev);
 	return AE_OK;
 }
 
 static int __init i2c_acpi_sbus_init(void)
 {
-	acpi_status status;
-
 	if (acpi_disabled)
 		return 0;
 
-	status = acpi_walk_namespace(ACPI_TYPE_DEVICE, ACPI_ROOT_OBJECT,
-				     ACPI_UINT32_MAX, find_acpi_sbus_devices,
-				     NULL, NULL, NULL);
-	if (status == AE_OK) {
-		return 0;
-	} else if (status == AE_ALREADY_EXISTS) {
-		return -EEXIST;
-	} else if (status == AE_NOT_FOUND) {
-		return -ENXIO;
-	} else {
-		return -EIO;
-	}
+	if (acpi_bus_register_driver(&i2c_acpi_sbus_driver) < 0)
+		return -ENODEV;
+
+	acpi_walk_namespace(ACPI_TYPE_DEVICE, ACPI_ROOT_OBJECT,
+			    ACPI_UINT32_MAX, find_acpi_sbus_devices,
+			    NULL, NULL, NULL);
 
 	return 0;
 }
 
 static void __exit i2c_acpi_sbus_exit(void)
 {
-	if (added_acpi_sbus) {
-		i2c_del_adapter(&acpi_sbus);
-	}
+	if (acpi_disabled)
+		return;
+
+	acpi_bus_unregister_driver(&i2c_acpi_sbus_driver);
 }
 
 MODULE_AUTHOR("David Bartley <andareed@gmail.com>");
-MODULE_DESCRIPTION("ACPI SBUS i2c device driver");
+MODULE_AUTHOR("Pali Rohár <pali.rohar@gmail.com>");
+MODULE_DESCRIPTION("ACPI SBUS i2c adapter driver");
 MODULE_LICENSE("GPL");
 
 module_init(i2c_acpi_sbus_init);
