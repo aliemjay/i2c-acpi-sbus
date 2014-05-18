@@ -21,6 +21,9 @@
     Implements an i2c bus on top of the ACPI SBUS device.
 */
 
+#define DRIVER_NAME "i2c-acpi-sbus"
+#define pr_fmt(fmt) DRIVER_NAME ": " fmt
+
 #include <linux/module.h>
 #include <linux/init.h>
 #include <linux/acpi.h>
@@ -157,7 +160,7 @@ static int i2c_acpi_sbus_add(struct acpi_device *device)
 
 	adapter = devm_kzalloc(&device->dev, sizeof(*adapter), GFP_KERNEL);
 	if (!adapter) {
-		pr_err("ACPI SBUS: failed to allocate memory\n");
+		dev_err(&device->dev, "failed to allocate memory\n");
 		return -ENOMEM;
 	}
 
@@ -165,7 +168,7 @@ static int i2c_acpi_sbus_add(struct acpi_device *device)
 	buffer.pointer = NULL;
 	status = acpi_get_name(device->handle, ACPI_FULL_PATHNAME, &buffer);
 	if (ACPI_FAILURE(status)) {
-		pr_err("ACPI SBUS: failed to get path\n");
+		dev_err(&device->dev, "failed to get path\n");
 		return -EINVAL;
 	}
 
@@ -181,13 +184,13 @@ static int i2c_acpi_sbus_add(struct acpi_device *device)
 	kfree(buffer.pointer);
 
 	if (i2c_add_adapter(adapter)) {
-		pr_err("ACPI SBUS: failed to add ACPI SBUS adapter\n");
+		dev_err(&device->dev, "failed to add ACPI SBUS adapter\n");
 		return -EINVAL;;
 	}
 
 	device->driver_data = adapter;
 
-	pr_info("ACPI SBUS: added %s\n", adapter->name);
+	dev_info(&device->dev, "added %s\n", adapter->name);
 	return 0;
 }
 
@@ -197,7 +200,7 @@ static int i2c_acpi_sbus_remove(struct acpi_device *device)
 
 	i2c_del_adapter(adapter);
 
-	pr_info("ACPI SBUS: removed %s\n", adapter->name);
+	dev_info(&device->dev, "removed %s\n", adapter->name);
 	return 0;
 }
 
@@ -206,7 +209,7 @@ static const struct acpi_device_id i2c_acpi_sbus_ids[] = {
 };
 
 static struct acpi_driver i2c_acpi_sbus_driver = {
-	.name = "i2c-acpi-sbus",
+	.name = DRIVER_NAME,
 	.ids = i2c_acpi_sbus_ids,
 	.ops = {
 		.add = i2c_acpi_sbus_add,
@@ -241,26 +244,26 @@ static acpi_status find_acpi_sbus_devices(acpi_handle handle, u32 level,
 	device = NULL;
 	ret = acpi_bus_get_device(handle, &device);
 	if (ret || !device) {
-		pr_err("ACPI SBUS: failed to get device\n");
+		pr_err("failed to get acpi device\n");
 		return AE_OK;
 	}
 
 	if (device->driver) {
-		pr_err("ACPI SBUS: device already in use\n");
+		dev_err(&device->dev, "device is already in use\n");
 		return AE_OK;
 	}
 
 	device->dev.driver = &i2c_acpi_sbus_driver.drv;
 	ret = device_attach(&device->dev);
 	if (!ret) {
-		pr_err("ACPI SBUS: failed to attach device\n");
+		dev_err(&device->dev, "failed to attach device\n");
 		return AE_OK;
 	}
 
 	device->driver = &i2c_acpi_sbus_driver;
 	ret = i2c_acpi_sbus_add(device);
 	if (ret) {
-		pr_err("ACPI SBUS: failed to init device\n");
+		dev_err(&device->dev, "failed to init device\n");
 		device_release_driver(&device->dev);
 		device->driver = NULL;
 		device->driver_data = NULL;
