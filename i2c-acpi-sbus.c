@@ -218,11 +218,15 @@ static struct acpi_driver i2c_acpi_sbus_driver = {
 static acpi_status find_acpi_sbus_devices(acpi_handle handle, u32 level,
 				          void *context, void **return_value)
 {
-	int ret;
+	int ret, i;
 	acpi_status status;
 	char node_name[5];
 	struct acpi_buffer buffer;
 	struct acpi_device *device;
+	char *test_methods[] = { "SRXB", "SSXB", "SRDB", "SWRB",
+				 "SRDW", "SWRW", "SBLR", "SBLW" };
+
+	/* ACPI device name must be SBUS and must have all above methods */
 
 	buffer.length = sizeof(node_name);
 	buffer.pointer = node_name;
@@ -230,22 +234,18 @@ static acpi_status find_acpi_sbus_devices(acpi_handle handle, u32 level,
 	if (ACPI_FAILURE(status) || strcmp("SBUS", node_name) != 0)
 		return AE_OK;
 
-	/*
-	  TODO: check if acpi handle has methods:
-	        "SRXB" "SSXB" "SRDB" "SWRB"
-	        "SRDW" "SWRW" "SBLR" "SBLW"
-	*/
-
-	pr_info("ACPI SBUS: found ACPI SBUS i2c adapter\n");
+	for (i = 0; i < ARRAY_SIZE(test_methods); ++i)
+		if (!acpi_has_method(handle, test_methods[i]))
+			return AE_OK;
 
 	device = NULL;
-	acpi_bus_get_device(handle, &device);
-	if (!device) {
+	ret = acpi_bus_get_device(handle, &device);
+	if (ret || !device) {
 		pr_err("ACPI SBUS: failed to get device\n");
 		return AE_OK;
 	}
 
-	if (device->driver || device->driver_data) {
+	if (device->driver) {
 		pr_err("ACPI SBUS: device already in use\n");
 		return AE_OK;
 	}
