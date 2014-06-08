@@ -185,7 +185,7 @@ static int i2c_acpi_sbus_add(struct acpi_device *device)
 
 	if (i2c_add_adapter(adapter)) {
 		dev_err(&device->dev, "failed to add ACPI SBUS adapter\n");
-		return -EINVAL;;
+		return -EINVAL;
 	}
 
 	device->driver_data = adapter;
