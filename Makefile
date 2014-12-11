@@ -1,7 +1,5 @@
-TARGET		:= $(shell uname -r)
-KERNEL_BUILD	:= /usr/src/linux-headers-$(TARGET)
-KERNEL_MODULES	:= /lib/modules/$(TARGET)
-SYSTEM_MAP      := /boot/System.map-$(TARGET)
+KERNEL_VERSION	:= $(shell uname -r)
+KERNEL_SRC	:= /lib/modules/$(KERNEL_VERSION)/build
 
 DRIVER  := i2c-acpi-sbus
 
@@ -12,10 +10,9 @@ obj-m	:= $(DRIVER).o
 all: modules
 
 modules clean:
-	@$(MAKE) -C $(KERNEL_BUILD) M=$(CURDIR) $@ EXTRA_CFLAGS=-g
+	$(MAKE) -C $(KERNEL_SRC) M=$(CURDIR) $@
 
 install: modules_install
 
 modules_install:
-	cp $(DRIVER).ko $(KERNEL_MODULES)/kernel/drivers/i2c/busses
-	depmod -a -F $(SYSTEM_MAP) $(TARGET)
+	$(MAKE) -C $(KERNEL_SRC) M=$(CURDIR) modules_install
